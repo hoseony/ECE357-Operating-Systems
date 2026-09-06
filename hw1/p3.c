@@ -18,16 +18,24 @@ int main(int argc, char ** argv) {
     /* check for the output flag "-o" */
     int opt; 
     char *output = NULL; // if there is no flag, output will remain NULL
+    int bufsize = BUFFSIZE;
 
     // getpot reorders the argv in a order.
     // It moves the flags and argument of the flags to the front.
     // (this behaves differently in macOS, it does not reorder argv).
-    while ((opt = getopt(argc, argv, "o:")) != -1) {
+    while ((opt = getopt(argc, argv, "o:b:")) != -1) {
         switch (opt) {
         case 'o':
             output = optarg;
             break;
-        default: 
+        case 'b':
+            bufsize = atoi(optarg);
+            if (bufsize <= 0) {
+                fprintf(stderr, "invalid buffer size: %s\n", optarg);
+                exit(EXIT_FAILURE);
+            }
+            break;
+        default: /* '?' */
             fprintf(stderr, "usage: kit [-o outfile] infile1 [...infile2....]\n");
             fprintf(stderr, "       kit [-o outfile]\n");
             exit(EXIT_FAILURE);
@@ -49,7 +57,7 @@ int main(int argc, char ** argv) {
     }
 
     /* reading the infiles */
-    char buf[BUFFSIZE];
+    char buf[bufsize];
     
     // optind conveniently returns the index
     // of the next element to be processed in argv
