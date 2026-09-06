@@ -5,10 +5,10 @@
 #include <unistd.h>
 #include <stdlib.h>
 
-// read write buffer size: 4096
-#define BUFFSIZE 4096
+#define BUFFSIZE 4096 // set buffer size for read or write 
 
 int main(int argc, char ** argv) {
+    // I used this error formatting as this was how it was presented in macOS 
     if (argc == 1) {
         fprintf(stderr, "usage: kit [-o outfile] infile1 [...infile2....]\n");
         fprintf(stderr, "       kit [-o outfile]\n");
@@ -17,79 +17,96 @@ int main(int argc, char ** argv) {
 
     /* check for the output flag "-o" */
     int opt; 
-    int flag_idx = 0; // keeps track of the index of output file
+    char *output = NULL; // if there is no flag, output will remain NULL
 
-    char *output = NULL;
- 
-    for (int i = 0; i < argc -1; i++) {
-        printf("argv[%d]: %s\n",i, argv[i]);
-    }
-    putchar('\n');
-
+    // getpot reorders the argv in a order.
+    // It moves the flags and argument of the flags to the front.
+    // (this behaves differently in macOS, it does not reorder argv).
     while ((opt = getopt(argc, argv, "o:")) != -1) {
         switch (opt) {
         case 'o':
-         
-            for (int i = 0; i < argc -1; i++) {
-                printf("argv[%d]: %s\n",i, argv[i]);
-            }
-            putchar('\n');
-
             output = optarg;
-            flag_idx = optind - 1;
-            printf("flag_dx: %d\n", flag_idx);
             break;
-
         default: 
             fprintf(stderr, "usage: kit [-o outfile] infile1 [...infile2....]\n");
             fprintf(stderr, "       kit [-o outfile]\n");
             exit(EXIT_FAILURE);
        }
-
-        putchar('\n');
     }
-
-
-    printf("output file: %s | index: %d\n", output, flag_idx);
-
 
     /* decide which file descriptor to use for output */
     int out_fd = 1; // if no flag stdout
-
-    if (output != NULL) { 
+    
+    if (output != NULL) {
         if ((out_fd = open(output, O_WRONLY | O_TRUNC | O_CREAT, 0666)) < 0) {
-            fprintf(stderr, "can't open file %s for writing: %s\n",
+            fprintf(stderr, "Can't open file %s for writing: %s\n",
                     output, strerror(errno));
             return -1;
         }
-    } 
+    } else {
+        // if no output file is specified, use stdout
+        out_fd = 1;
+    }
 
-    /* start reading infiles*/
+    /* reading the infiles */
     char buf[BUFFSIZE];
     
-    /* find next file from command-line */
-
-    // It should skeep indicies of things it previously read.
-    // Specifically, -o and its arg
-
-
-    for (int i = 0; i < argc -1; i++) {
-        printf("argv[%d]: %s\n",i, argv[i]);
-    }
-    putchar('\n');
+    // optind conveniently returns the index
+    // of the next element to be processed in argv
+    int bytes_read, bytes_wrote;
+    int in_fd, is_stdin;
 
 
+    for(int i = optind; i < argc; i++) {
+        // if argv = "-", get the input from stdin
+        is_stdin = (strcmp(argv[i], "-") == 0);
 
-    int idx = 1;
-
-    while(1) {
-        if (idx == flag_idx || idx == flag_idx - 1 || idx == argc - 1) {
-            continue;
+        if (is_stdin) {
+            in_fd = 0;
+        } else {
+            if ((in_fd = open(argv[i], O_RDONLY, 0666)) < 0) {
+                fprintf(stderr, "Can't open the file %s for reading: %s\n", 
+                        argv[i], strerror(errno));
+                return -1;
+            }
         }
 
-        printf("argv[%d]: %s\n", idx, argv[idx]);
-        idx++;
+        /* handle partial read */
+        while((bytes_read = read(in_fd, buf, sizeof(buf))) > 0) {
 
+            /* handle partial write */
+            ssize_t off = 0; // keeps track how many bytes are written
+
+            while(off < bytes_read) {
+                ssize_t r = write(out_fd, buf + off, bytes_read);
+                if (r == -1) {
+                    fprintf(stderr, "Can't write the file %s: %s\n", 
+                            output, strerror(errno));
+                    return -1;
+
+                }
+                off += r;
+            }
+        }
+
+        /* handle bytes_read error */
+        if (bytes_read < 0) {
+            fprintf(stderr, "Can't read the file %s: %s\n",
+                    argv[i], strerror(errno));
+            return -1;
+        }
+
+        /* closing files */
+        if (is_stdin && (close(in_fd) < 0)) {
+            fprintf(stderr, "Can't close the file %s: %s\n",
+                    argv[i], strerror(errno));
+            return -1;
+        }
+    }
+
+    if (close(out_fd) < 0) {
+        fprintf(stderr, "Can't close the output: %s\n", strerror(errno));
+        return -1;
     }
 
     return 0;
