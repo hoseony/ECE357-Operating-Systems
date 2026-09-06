@@ -78,12 +78,10 @@ int main(int argc, char ** argv) {
             ssize_t off = 0; // keeps track how many bytes are written
 
             while(off < bytes_read) {
-                ssize_t r = write(out_fd, buf + off, bytes_read);
+                ssize_t r = write(out_fd, buf + off, bytes_read - off);
                 if (r == -1) {
-                    fprintf(stderr, "Can't write the file %s: %s\n", 
-                            output, strerror(errno));
+                    fprintf(stderr, "Can't write output: %s\n", strerror(errno));
                     return -1;
-
                 }
                 off += r;
             }
@@ -97,7 +95,7 @@ int main(int argc, char ** argv) {
         }
 
         /* closing files */
-        if (is_stdin && (close(in_fd) < 0)) {
+        if (!is_stdin && (close(in_fd) < 0)) {
             fprintf(stderr, "Can't close the file %s: %s\n",
                     argv[i], strerror(errno));
             return -1;
