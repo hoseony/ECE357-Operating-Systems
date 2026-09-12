@@ -1,7 +1,6 @@
-# Compilation
 Compile the program with make
 
-# Sample runs: ran in kit/
+Sample runs: ran in kit/
 
 #1
 ❯ ./kit -o out/output.txt test/hello.txt test/world.txt
@@ -48,11 +47,13 @@ second stdin
 Can't open the file test/nothing for reading: No such file or directory
 
 
-# PROBLEM 3EC -- Extra Credit:
+PROBLEM 3EC -- Extra Credit:
+
 The following table shows the summary of the script /kit/3EC.sh
 
++-------------+--------+--------+--------+----------+
 | buffer size | real   | user   | system |  MB/sec  |
-|-------------|--------|--------|--------|----------|
++-------------+--------+--------+--------+----------+
 | 1           | 27.383 | 6.691  | 18.584 |     2.34 |
 | 2           | 13.867 | 3.508  | 9.292  |     4.61 |
 | 4           | 6.876  | 1.747  | 4.600  |     9.31 |
@@ -70,7 +71,7 @@ The following table shows the summary of the script /kit/3EC.sh
 | 16384       | 0.005  | 0.001  | 0.004  | 12800.00 |
 | 32768       | 0.004  | 0.001  | 0.003  | 16000.00 |
 | 65536       | 0.004  | 0.000  | 0.004  | 16000.00 |
-
++-------------+--------+--------+--------+----------+
 
 The throughput approximately doubles each time the buffer 
 size is doubled at smaller buffer sizes. As the buffer size 
