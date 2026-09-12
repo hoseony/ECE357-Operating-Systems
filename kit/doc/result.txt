@@ -1,3 +1,54 @@
+Compile the program with make
+
+Sample runs: ran in kit/
+
+#1
+❯ ./kit -o out/output.txt test/hello.txt test/world.txt
+❯ cat out/output.txt
+Hello
+World!
+
+#2
+❯ ./kit test/world.txt test/hello.txt
+World!
+Hello
+
+#3
+❯ ./kit - < test/input.txt
+Hello from stdin!
+
+#4
+❯ ./kit -o out/output.txt test/hello.txt test/world.txt - < ./test/input.txt
+❯ cat out/output.txt
+Hello
+World!
+Hello from stdin!
+
+#5
+❯ ./kit < test/input.txt
+Hello from stdin!
+
+#6
+❯ cat ./kit test/hello.txt | sha1sum
+68b573ac0d3a15f9d2f84e0190466cf1ec805527  -
+❯ ./kit ./kit test/hello.txt| sha1sum
+68b573ac0d3a15f9d2f84e0190466cf1ec805527  -
+
+#7
+❯ ./kit - -
+first stdin
+first stdin
+^Dsecond stdin
+second stdin
+^D
+
+#8
+❯ ./kit test/nothing
+Can't open the file test/nothing for reading: No such file or directory
+
+
+PROBLEM 3EC -- Extra Credit:
+
 The following table shows the summary of the script /kit/3EC.sh
 
 +-------------+--------+--------+--------+----------+
@@ -21,3 +72,17 @@ The following table shows the summary of the script /kit/3EC.sh
 | 32768       | 0.004  | 0.001  | 0.003  | 16000.00 |
 | 65536       | 0.004  | 0.000  | 0.004  | 16000.00 |
 +-------------+--------+--------+--------+----------+
+
+The throughput approximately doubles each time the buffer 
+size is doubled at smaller buffer sizes. As the buffer size 
+becomes larger, the increase in throughput gradually becomes
+smaller, eventually leveling off at about 16000 MB/sec.
+
+Larger buffers reduce the number of read and write system
+calls needed to process the given file. Thus, the performance
+initially increases significantly. However, once the buffer
+becomes large, reducing the number of such system calls further
+makes less difference because most of the remaining time is 
+spent actually moving the data. Therefore increasing the buffer
+size has diminishing returns, and that is why it appears to 
+approach an asymptotic limit.
