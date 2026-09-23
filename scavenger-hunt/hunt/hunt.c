@@ -39,7 +39,6 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
-    // tree broom broom!!
     tree(argv[2], target_fd, &target_stat);
     close(target_fd);
 
@@ -54,7 +53,7 @@ int tree(char *path, int target_fd, struct stat *target_stat) {
 
     /* open the directory */
     if ((dir = opendir(path)) == NULL) {
-        fprintf(stderr, "cannot open %s\n", path);
+        fprintf(stderr, "Can not open directory %s: %s\n", path, strerror(errno));
         return -1;
     }
 
@@ -67,8 +66,12 @@ int tree(char *path, int target_fd, struct stat *target_stat) {
 
         // build a full path
         char path_buf[BUFSIZE];
-        snprintf(path_buf, sizeof(path_buf), "%s/%s", path, dp->d_name);
-        // do some handling for snprintf
+        int n = snprintf(path_buf, sizeof(path_buf), "%s/%s", path, dp->d_name);
+        if (n < 0 || (unsigned long)n >= sizeof(path_buf)) {
+            fprintf(stderr, "Path too long\n");
+            continue;
+        }
+
 
         if (lstat(path_buf, &finfo) < 0) {
             fprintf(stderr, "Can not get stat for %s: %s\n", path_buf, strerror(errno));
@@ -100,13 +103,26 @@ int tree(char *path, int target_fd, struct stat *target_stat) {
 
                 // if symlink goes to regular file, check
                 if (S_ISREG(link_stat.st_mode)) {
+                    if (link_stat.st_size != target_stat->st_size) {
+                        continue;
+                    }
+
                     if ((fd = open(path_buf, O_RDONLY)) < 0) {
                         fprintf(stderr, "Can not open the file %s: %s\n", path_buf, strerror(errno));
                         continue;
                     };
 
                     if (check_match(fd, target_fd) > 0) {
-                        printf("\tIDENTICAL FILE! MATCH!\n");
+                        char link_buf[BUFSIZE];
+
+                        ssize_t len = readlink(path_buf, link_buf, sizeof(link_buf) - 1);
+                        
+                        if (len < 0) {
+                            fprintf(stderr, "Can not readlink %s: %s\n", path_buf, strerror(errno));
+                        } else {
+                            link_buf[len] = '\0';
+                            printf("\tRegular Match: %s\n", link_buf);
+                        }
                     }
 
                     close(fd);
@@ -141,8 +157,8 @@ int tree(char *path, int target_fd, struct stat *target_stat) {
 
             /* check match */
             if (check_match(fd, target_fd) > 0) {
-                printf("\tIDENTICAL FILE! MATCH!\n");
-            };
+                printf("\tSYMLINK CONTENTS\n");
+            }
 
             close(fd);
         }
@@ -182,9 +198,8 @@ int check_match(int fd1, int fd2) {
     }
 
     /* copmare size */
-    if (stat1.st_size != stat2.st_size) {
+    if (stat1.st_size != stat2.st_size)
         return 0;
-    }
 
     /* compare bytes */
     int n1, n2;
@@ -193,20 +208,19 @@ int check_match(int fd1, int fd2) {
     }
 
     while(1) {
-
         n1 = ensure_read(fd1, buf1, sizeof(buf1));
-        if (n1 < 0) {
+        if (n1 < 0) 
             return -1;
-        }
 
         n2 = ensure_read(fd2, buf2, sizeof(buf2));
-        if ((n2 < 0) || (n1 != n2)) {
+        if (n2 < 0) 
             return -1;
-        }
 
-        if (n1 == 0) {
+        if (n1 != n2) 
+            return 0;
+
+        if (n1 == 0) 
             break;
-        }
         
         for(int i = 0; i < n1; i++) {
             if (buf1[i] != buf2[i]) {
