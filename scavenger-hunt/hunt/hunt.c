@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <fcntl.h>
-// #include <errno.h>
+#include <errno.h>
 #include <unistd.h>
 #include <dirent.h>
 #include <sys/types.h>
@@ -11,10 +11,42 @@
 
 #define BUFSIZE 4096
 
+/* ========== Function Prototypes ========== */
 int check_match(int fd1, int fd2);
 int ensure_read(int fd, char *buf, ssize_t size);
+int tree(char *path, int target_fd, struct stat *target_stat);
+int check_lseek(int fd1, int fd2);
+/* ========================================= */
 
-int tree(char *path, int target_fd/* struct stat *target_finfo */) {
+int main(int argc, char *argv[]) {
+    if (argc != 3) {
+        printf("that ain't how you use this");
+        return -1;
+    }
+    
+    /* get info about the target file */
+    struct stat target_stat;
+    int target_fd;
+
+    if ((target_fd = open(argv[1], O_RDONLY)) < 0) {
+        fprintf(stderr, "Can not open %s: %s\n", argv[1], strerror(errno));
+        return -1;
+    }
+    
+    if (fstat(target_fd, &target_stat) < 0) {
+        fprintf(stderr, "Can not stat target %s: %s\n", argv[1], strerror(errno));
+        close(target_fd);
+        return -1;
+    }
+
+    // tree broom broom!!
+    tree(argv[2], target_fd, &target_stat);
+    close(target_fd);
+
+    return 0;
+}
+
+int tree(char *path, int target_fd, struct stat *target_stat) {
     struct dirent *dp;
     struct stat finfo;
     DIR *dir;
@@ -34,58 +66,102 @@ int tree(char *path, int target_fd/* struct stat *target_finfo */) {
         }
 
         // build a full path
-        char buf[BUFSIZE];
-        snprintf(buf, sizeof(buf), "%s/%s", path, dp->d_name);
+        char path_buf[BUFSIZE];
+        snprintf(path_buf, sizeof(path_buf), "%s/%s", path, dp->d_name);
+        // do some handling for snprintf
 
-        // open that "file" 
-        if ((fd = open(buf, O_RDONLY)) < 0) {
-            fprintf(stderr, "Can not open the file %s\n", buf);
-        };
+        if (lstat(path_buf, &finfo) < 0) {
+            fprintf(stderr, "Can not get stat for %s: %s\n", path_buf, strerror(errno));
+            continue;
+        }
 
-        if (fstat(fd, &finfo) < 0) {
-            fprintf(stderr, "Can not get stat for");
-            exit(EXIT_FAILURE);
-        };
-        printf("%5d: [%30s] \t %lu \t %d\n", fd, buf, finfo.st_ino, finfo.st_mode);
+        printf("[%30s] \t %lu \t %d\n", path_buf, finfo.st_ino, finfo.st_mode);
 
-        /* symlink? */
+        /* symlink specific handling */
+        if (S_ISLNK(finfo.st_mode)) {
+            struct stat link_stat;
+            fprintf(stdout, "\tlink!\n");
 
+            /* Follow the symlink
+             *  - if it is the same inode as the original file, report
+             *  - if check_match returns true, match
+             */
+
+            if (stat(path_buf, &link_stat) < 0) {
+                fprintf(stderr, "Can not get stat for %s: %s\n", path_buf, strerror(errno));
+            } else {
+                printf("\t%lu\n", link_stat.st_ino);
+
+                // compare link_stat with target_stat
+                if ((link_stat.st_ino == target_stat->st_ino) && (link_stat.st_dev == target_stat->st_dev)) {
+                    fprintf(stdout, "\tSYMLINK TO ORIGINAL FILE\n");
+                    continue;
+                }
+
+                // if symlink goes to regular file, check
+                if (S_ISREG(link_stat.st_mode)) {
+                    if ((fd = open(path_buf, O_RDONLY)) < 0) {
+                        fprintf(stderr, "Can not open the file %s: %s\n", path_buf, strerror(errno));
+                        continue;
+                    };
+
+                    if (check_match(fd, target_fd) > 0) {
+                        printf("\tIDENTICAL FILE! MATCH!\n");
+                    }
+
+                    close(fd);
+                }
+            }
+
+            continue; // skip
+        }
 
         /* compare if regualr files */
-        if (S_ISREG(finfo.st_mode)) { // nice macro
-            check_match(fd, target_fd);
+        if (S_ISREG(finfo.st_mode)) {
+            /* hard link */
+            if ((finfo.st_ino == target_stat->st_ino) && (finfo.st_dev == target_stat->st_dev)) {
+                
+                if (target_stat->st_nlink > 1) {
+                    fprintf(stdout, "\tHARD LINK TO TARGET: %s\n", path_buf);
+                }
+
+                continue;
+            }
+
+            // this just can not be identical
+            if (finfo.st_size != target_stat->st_size) {
+                continue;
+            }
+
+            // open that "file" 
+            if ((fd = open(path_buf, O_RDONLY)) < 0) {
+                fprintf(stderr, "Can not open the file %s: %s\n", path_buf, strerror(errno));
+                continue;
+            };
+
+            /* check match */
+            if (check_match(fd, target_fd) > 0) {
+                printf("\tIDENTICAL FILE! MATCH!\n");
+            };
+
+            close(fd);
         }
 
         /* recursion logic */
         if (S_ISDIR(finfo.st_mode)) {
-            // if it is a directory
-            // (need to loop through that directory again)
-            tree(buf, target_fd);
+            // if it is a directory, loop throught that directory
+            tree(path_buf, target_fd, target_stat);
         }
+
     }
 
+    closedir(dir);
     return 1;
 }
 
 
-int main(int argc, char *argv[]) {
-    if (argc != 3) {
-        printf("that ain't how you use this");
-        return -1;
-    }
-    
-    /* get info about the target file */
-    struct stat target_finfo;
-    int target_fd = open(argv[1], O_RDONLY);
-    // fstat(target_fd, &target_finfo);
-
-    // tree broom broom!!
-    tree(argv[2], target_fd);
-
-    return 0;
-}
-
 // check if fd1 is the same as target file, fd2
+// returns 0 if different, -1 if error, 1 if same
 int check_match(int fd1, int fd2) {
     // identical := same number of bytes && every byte matches
     // no need to consider sparse allocation
@@ -94,49 +170,50 @@ int check_match(int fd1, int fd2) {
     char buf1[BUFSIZE];
     char buf2[BUFSIZE];
 
+    /* get stat for fd1 and fd2 */
     if (fstat(fd1, &stat1) < 0) {
-        fprintf(stderr, "Can not read fd1: %d", fd1);
-        exit(EXIT_FAILURE);
-    }
-
-    if (fstat(fd2, &stat2) < 0) {
-        fprintf(stderr, "Can not read fd2: %d", fd2);
-        exit(EXIT_FAILURE);
-    }
-
-    // compare size
-    if (stat1.st_size != stat2.st_size) {
+        fprintf(stderr, "Can not read fd1 %d: %s\n", fd1, strerror(errno));
         return -1;
     }
 
-    // compare bytes
-    int n1, n2;
-    while((n1 = ensure_read(fd1, buf1, sizeof(buf1))) > 0) {
-        n2 = ensure_read(fd2, buf2, sizeof(buf2));
+    if (fstat(fd2, &stat2) < 0) {
+        fprintf(stderr, "Can not read fd2 %d: %s\n", fd2, strerror(errno));
+        return -1;
+    }
 
-        if (n1 != n2) {
+    /* copmare size */
+    if (stat1.st_size != stat2.st_size) {
+        return 0;
+    }
+
+    /* compare bytes */
+    int n1, n2;
+    if (check_lseek(fd1, fd2) < 0) {
+        return -1;
+    }
+
+    while(1) {
+
+        n1 = ensure_read(fd1, buf1, sizeof(buf1));
+        if (n1 < 0) {
             return -1;
         }
 
-        if ((n1 < 0) || (n1 < 0)) {
+        n2 = ensure_read(fd2, buf2, sizeof(buf2));
+        if ((n2 < 0) || (n1 != n2)) {
             return -1;
+        }
+
+        if (n1 == 0) {
+            break;
         }
         
         for(int i = 0; i < n1; i++) {
             if (buf1[i] != buf2[i]) {
-                lseek(fd1, 0, SEEK_SET);
-                lseek(fd2, 0, SEEK_SET);
-
-                return -1;
+                return 0;
             }
         }
     }
-
-    printf("match!!\n");
-
-    lseek(fd1, 0, SEEK_SET);
-    lseek(fd2, 0, SEEK_SET);
-
 
     return 1;
 }
@@ -155,7 +232,7 @@ int ensure_read(int fd, char *buf, ssize_t size) {
         n = read(fd, &(buf[total]), size - total);
 
         if (n < 0) { // Failed Reading
-            fprintf(stderr, "");
+            fprintf(stderr, "Can not read the file \n");
             return -1;
         }
 
@@ -165,5 +242,20 @@ int ensure_read(int fd, char *buf, ssize_t size) {
 
         total += n;
     }
+
     return total;
+}
+
+int check_lseek(int fd1, int fd2) {
+    if (lseek(fd1, 0, SEEK_SET) == (off_t)-1) {
+        fprintf(stderr, "lseek fd1: %s\n", strerror(errno));
+        return -1;
+    }
+
+    if (lseek(fd2, 0, SEEK_SET) == (off_t)-1) {
+        fprintf(stderr, "lseek fd2: %s\n", strerror(errno));
+        return -1;
+    }
+
+    return 1;
 }
