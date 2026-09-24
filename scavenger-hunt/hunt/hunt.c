@@ -12,16 +12,16 @@
 #define BUFSIZE 4096
 
 /* ========== Function Prototypes ========== */
-int check_match(int fd1, int fd2);
+int check_match(int fd1, int fd2, char *path1, char *path2);
 int ensure_read(int fd, char *buf, ssize_t size);
-int tree(char *path, int target_fd, struct stat *target_stat);
-int check_lseek(int fd1, int fd2);
+int tree(char *path, int target_fd, struct stat *target_stat, char *target_path);
+int check_lseek(int fd1, int fd2, char *path, char *path2);
 /* ========================================= */
 
 int main(int argc, char *argv[]) {
     if (argc != 3) {
-        printf("that ain't how you use this");
-        return -1;
+        fprintf(stderr, "Usage: %s [filename] [start path]\n", argv[0]);
+        return 1;
     }
     
     /* get info about the target file */
@@ -30,22 +30,22 @@ int main(int argc, char *argv[]) {
 
     if ((target_fd = open(argv[1], O_RDONLY)) < 0) {
         fprintf(stderr, "Can not open %s: %s\n", argv[1], strerror(errno));
-        return -1;
+        return 1;
     }
     
     if (fstat(target_fd, &target_stat) < 0) {
-        fprintf(stderr, "Can not stat target %s: %s\n", argv[1], strerror(errno));
+        fprintf(stderr, "Can not fstat target %s: %s\n", argv[1], strerror(errno));
         close(target_fd);
-        return -1;
+        return 1;
     }
 
-    tree(argv[2], target_fd, &target_stat);
+    tree(argv[2], target_fd, &target_stat, argv[1]);
     close(target_fd);
 
     return 0;
 }
 
-int tree(char *path, int target_fd, struct stat *target_stat) {
+int tree(char *path, int target_fd, struct stat *target_stat, char *target_path) {
     struct dirent *dp;
     struct stat finfo;
     DIR *dir;
@@ -68,22 +68,18 @@ int tree(char *path, int target_fd, struct stat *target_stat) {
         char path_buf[BUFSIZE];
         int n = snprintf(path_buf, sizeof(path_buf), "%s/%s", path, dp->d_name);
         if (n < 0 || (unsigned long)n >= sizeof(path_buf)) {
-            fprintf(stderr, "Path too long\n");
+            fprintf(stderr, "Can not process %s/%s: Path too long\n", path, dp->d_name);
             continue;
         }
-
 
         if (lstat(path_buf, &finfo) < 0) {
-            fprintf(stderr, "Can not get stat for %s: %s\n", path_buf, strerror(errno));
+            fprintf(stderr, "Can not lstat %s: %s\n", path_buf, strerror(errno));
             continue;
         }
-
-        printf("[%30s] \t %lu \t %d\n", path_buf, finfo.st_ino, finfo.st_mode);
 
         /* symlink specific handling */
         if (S_ISLNK(finfo.st_mode)) {
             struct stat link_stat;
-            fprintf(stdout, "\tlink!\n");
 
             /* Follow the symlink
              *  - if it is the same inode as the original file, report
@@ -91,13 +87,11 @@ int tree(char *path, int target_fd, struct stat *target_stat) {
              */
 
             if (stat(path_buf, &link_stat) < 0) {
-                fprintf(stderr, "Can not get stat for %s: %s\n", path_buf, strerror(errno));
+                fprintf(stderr, "Can not stat %s: %s\n", path_buf, strerror(errno));
             } else {
-                printf("\t%lu\n", link_stat.st_ino);
-
                 // compare link_stat with target_stat
                 if ((link_stat.st_ino == target_stat->st_ino) && (link_stat.st_dev == target_stat->st_dev)) {
-                    fprintf(stdout, "\tSYMLINK TO ORIGINAL FILE\n");
+                    fprintf(stdout, "%s\t [SYMLINK RESOLVES TO TARGET]\n", path_buf);
                     continue;
                 }
 
@@ -112,7 +106,7 @@ int tree(char *path, int target_fd, struct stat *target_stat) {
                         continue;
                     };
 
-                    if (check_match(fd, target_fd) > 0) {
+                    if (check_match(fd, target_fd, path_buf, target_path) > 0) {
                         char link_buf[BUFSIZE];
 
                         ssize_t len = readlink(path_buf, link_buf, sizeof(link_buf) - 1);
@@ -121,7 +115,10 @@ int tree(char *path, int target_fd, struct stat *target_stat) {
                             fprintf(stderr, "Can not readlink %s: %s\n", path_buf, strerror(errno));
                         } else {
                             link_buf[len] = '\0';
-                            printf("\tRegular Match: %s\n", link_buf);
+                            fprintf(stdout, "%s\t [SYMLINK (%s) RESOLVES TO DUPLICATE] (nlink=%lu, dev 0x%lx, ino %lu)\n", 
+                                    path_buf, link_buf, 
+                                    (unsigned long)link_stat.st_nlink,
+                                    (unsigned long)link_stat.st_dev, (unsigned long)link_stat.st_ino);
                         }
                     }
 
@@ -138,7 +135,7 @@ int tree(char *path, int target_fd, struct stat *target_stat) {
             if ((finfo.st_ino == target_stat->st_ino) && (finfo.st_dev == target_stat->st_dev)) {
                 
                 if (target_stat->st_nlink > 1) {
-                    fprintf(stdout, "\tHARD LINK TO TARGET: %s\n", path_buf);
+                    fprintf(stdout, "%s\t [HARD LINK TO TARGET]\n", path_buf);
                 }
 
                 continue;
@@ -156,8 +153,10 @@ int tree(char *path, int target_fd, struct stat *target_stat) {
             };
 
             /* check match */
-            if (check_match(fd, target_fd) > 0) {
-                printf("\tSYMLINK CONTENTS\n");
+            if (check_match(fd, target_fd, path_buf, target_path) > 0) {
+                printf("%s\t [DUPLICATE OF TARGET] (nlink=%lu, dev 0x%lx, ino %lu)\n", 
+                        path_buf, (unsigned long)finfo.st_nlink, 
+                        (unsigned long)finfo.st_dev, (unsigned long)finfo.st_ino);
             }
 
             close(fd);
@@ -166,7 +165,7 @@ int tree(char *path, int target_fd, struct stat *target_stat) {
         /* recursion logic */
         if (S_ISDIR(finfo.st_mode)) {
             // if it is a directory, loop throught that directory
-            tree(path_buf, target_fd, target_stat);
+            tree(path_buf, target_fd, target_stat, target_path);
         }
 
     }
@@ -178,7 +177,7 @@ int tree(char *path, int target_fd, struct stat *target_stat) {
 
 // check if fd1 is the same as target file, fd2
 // returns 0 if different, -1 if error, 1 if same
-int check_match(int fd1, int fd2) {
+int check_match(int fd1, int fd2, char *path1, char *path2) {
     // identical := same number of bytes && every byte matches
     // no need to consider sparse allocation
     
@@ -188,12 +187,12 @@ int check_match(int fd1, int fd2) {
 
     /* get stat for fd1 and fd2 */
     if (fstat(fd1, &stat1) < 0) {
-        fprintf(stderr, "Can not read fd1 %d: %s\n", fd1, strerror(errno));
+        fprintf(stderr, "Can not fstat %s: %s\n", path1, strerror(errno));
         return -1;
     }
 
     if (fstat(fd2, &stat2) < 0) {
-        fprintf(stderr, "Can not read fd2 %d: %s\n", fd2, strerror(errno));
+        fprintf(stderr, "Can not fstat %s: %s\n", path2, strerror(errno));
         return -1;
     }
 
@@ -203,19 +202,21 @@ int check_match(int fd1, int fd2) {
 
     /* compare bytes */
     int n1, n2;
-    if (check_lseek(fd1, fd2) < 0) {
+    if (check_lseek(fd1, fd2, path1, path2) < 0) {
         return -1;
     }
 
     while(1) {
         n1 = ensure_read(fd1, buf1, sizeof(buf1));
-        if (n1 < 0) 
+        if (n1 < 0) {
+            fprintf(stderr, "Can not read %s: %s\n", path1, strerror(errno));
             return -1;
-
+        }
         n2 = ensure_read(fd2, buf2, sizeof(buf2));
-        if (n2 < 0) 
+        if (n2 < 0) {
+            fprintf(stderr, "Can not read %s: %s\n", path2, strerror(errno));
             return -1;
-
+        }
         if (n1 != n2) 
             return 0;
 
@@ -246,7 +247,6 @@ int ensure_read(int fd, char *buf, ssize_t size) {
         n = read(fd, &(buf[total]), size - total);
 
         if (n < 0) { // Failed Reading
-            fprintf(stderr, "Can not read the file \n");
             return -1;
         }
 
@@ -260,14 +260,14 @@ int ensure_read(int fd, char *buf, ssize_t size) {
     return total;
 }
 
-int check_lseek(int fd1, int fd2) {
+int check_lseek(int fd1, int fd2, char *path1, char *path2) {
     if (lseek(fd1, 0, SEEK_SET) == (off_t)-1) {
-        fprintf(stderr, "lseek fd1: %s\n", strerror(errno));
+        fprintf(stderr, "Can not lseek %s: %s\n", path1, strerror(errno));
         return -1;
     }
 
     if (lseek(fd2, 0, SEEK_SET) == (off_t)-1) {
-        fprintf(stderr, "lseek fd2: %s\n", strerror(errno));
+        fprintf(stderr, "Can not lseek %s: %s\n", path2, strerror(errno));
         return -1;
     }
 
