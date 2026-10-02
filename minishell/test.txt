@@ -1,0 +1,3 @@
+pwd
+cd ./testdir///
+cd /Users/hoseonyu/Documents/repos/fish/fish-shell
