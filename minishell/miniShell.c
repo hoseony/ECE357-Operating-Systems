@@ -26,14 +26,18 @@ int main(int argc, char **argv) {
     char *line = NULL;
     size_t size = 0;
 
+    int lastExitStatus = 0; /* keep track of last exist status, used for builtIn_exit */
+
     while (getline(&line, &size, fp) != -1) {
         fprintf(stderr, "[ DEBUG ] LINE_READ: %s", line);
+
+        /* skip # */
         if (line[0] == '#') {
             printf("[ DEBUG ] # detected, skipping...\n");
             continue;
         }
 
-        /* smoe how parse and execute it */
+        /* parse and execute */
     
         // tokenization
         char *token[BUFSIZE];
@@ -52,7 +56,7 @@ int main(int argc, char **argv) {
         }
         printf("\n");
 
-        execute(token);
+        execute(token, &lastExitStatus);
     }
 
     free(line);
@@ -76,20 +80,93 @@ int tokenize(char *line, char **buf) {
     return i;
 }
 
-int execute(char **token) {
-    if (strcmp(token[0], "pwd") == 0)
+int execute(char **token, int *lastExitStatus) { /* argv */
+    /* I/O redirection, find the  */
+    char *outputFile = NULL; 
+    char *inputFile = NULL;
+
+    int j = 0;
+
+    for (int i = 0; token[i] != NULL; i++) {
+        if (strcmp(token[i], ">") == 0) {
+            if (token[i + 1] == NULL) {
+                fprintf(stderr, "miniShell: syntax error, expected file after > \n");
+                return -1;
+            }
+            outputFile = token[i + 1];
+            i++; // skip the output file
+        } else if (strcmp(token[i], "<") == 0) {
+            if (token[i + 1] == NULL) {
+                fprintf(stderr, "miniShell: syntax error, expected file after < \n");
+                return -1;
+            }
+            inputFile = token[i + 1];
+            i++; // skip the input file
+        } else {
+            // if it is neither of the redirectino, then it is an actual command
+            // reconstructing the command without any redirection info
+            token[j] = token[i];
+            j++;
+        }
+    }
+    token[j] = NULL;
+
+    /* run built-in commands */
+    if (strcmp(token[0], "pwd") == 0) {
         builtIn_pwd();
-    if (strcmp(token[0], "cd") == 0)
+        return 1;
+    }
+    if (strcmp(token[0], "cd") == 0) {
         builtIn_cd(token[1]);
-    if (strcmp(token[0], "exit") == 0)
-        ;
-    /* if none of the built-in commands were matched,
-     * execute that thing 
-     */
-    
-    switch (fork()) {
+        return 1;
+    }
+    if (strcmp(token[0], "exit") == 0) {
+        builtIn_exit(token, lastExitStatus);
+        return 1; // left it just in case...
+    }
+
+    /* if none of the built-in commands were matched, run the program */
+    int pid, status;
+    switch (pid = fork()) {
+        case -1:
+            fprintf(stderr, "[ DEBUG ] failed fork\n");
+            break;
+
         case 0: 
-            execvp(token[0], token);
+            /* handle I/O redirection */
+            if (inputFile != NULL) {
+                int inFd = open(inputFile, O_RDONLY);
+                if (inFd < 0) {
+                    fprintf(stderr, "Can not open %s: %s", inputFile, strerror(errno));
+                    return 1;
+                }
+
+                dup2(inFd, STDIN_FILENO);
+            }
+
+            if (outputFile != NULL) {
+                int outFd = open(outputFile, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+                if (outFd< 0) {
+                    fprintf(stderr, "Can not open %s: %s", outputFile, strerror(errno));
+                    return 1;
+                }
+
+                dup2(outFd, STDOUT_FILENO);
+            }
+
+            fprintf(stderr, "[ DEUBG ] running child\n");
+            int returnState = execvp(token[0], token);
+            /* error handling */
+
+            if (returnState < 0) {
+                fprintf(stderr, "[ ERROR ] execvp returned with an error: %s\n", strerror(errno));
+            }
+
+            break;
+
+        default:
+            wait(&status);
+            fprintf(stderr, "[ DEBUG ] waiting done. status: %d\n", status);
     }
 
     return 1;
@@ -97,8 +174,17 @@ int execute(char **token) {
 
 /* built-in commands */
 int builtIn_cd(char *dir) {
+    /* default: home directory */
+    if (dir == NULL) {
+        char *value;
+        value = getenv("HOME");
+        printf("[ DEBUG ] getenv: %s\n", value);
+        chdir(value);
+        return 1;
+    }
+
+    /* else, use dir */
     chdir(dir);
-    // printf("%s\n", dir);
     printf("[ DEBUG ] "); builtIn_pwd();
     return 1;
 }
@@ -110,6 +196,16 @@ int builtIn_pwd() {
     return 1;
 }
 
-int builtIn_exit() {
+int builtIn_exit(char **argv, int *lastExitStatus) {
+    /* if no argument, */
+    if (argv[1] == NULL) {
+        exit(*lastExitStatus);
+    }
+
+    int exitStatus = atoi(argv[1]);
+    // printf("%d\n", exitStatus);
+
+    exit(exitStatus);
     return 1;
 }
+

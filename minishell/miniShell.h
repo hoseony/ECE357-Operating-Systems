@@ -8,12 +8,13 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <string.h>
-#define _GNU_SOURCE
+#include <sys/wait.h>
+// #define _GNU_SOURCE
 
 int tokenize(char *line, char **buf);
-int execute(char **token);
+int execute(char **token, int *lastExitStatus);
 int builtIn_cd(char *dir);
 int builtIn_pwd();
-int builtIn_exit();
+int builtIn_exit(char **argv, int *lastExitStatus);
 
 #endif
