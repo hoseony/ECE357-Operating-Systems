@@ -1,14 +1,1 @@
-total 200
-drwxr-xr-x@ 13 hoseonyu  staff   416B Oct  6 16:11 .
-drwxr-xr-x@  7 hoseonyu  staff   224B Oct  4 22:20 ..
--rw-r--r--@  1 hoseonyu  staff   3.6K Oct  5 15:55 ''
--rwxr-xr-x@  1 hoseonyu  staff    34K Oct  6 13:13 a.out
-lrwxr-xr-x@  1 hoseonyu  staff     8B Oct  3 08:24 link -> testdir/
--rw-r--r--@  1 hoseonyu  staff   124B Oct  2 17:02 Makefile
--rwxr-xr-x@  1 hoseonyu  staff    34K Oct  6 16:11 miniShell
--rw-r--r--@  1 hoseonyu  staff   5.2K Oct  6 16:11 miniShell.c
--rw-r--r--@  1 hoseonyu  staff   419B Oct  3 08:45 miniShell.h
--rw-r--r--@  1 hoseonyu  staff     0B Oct  6 16:12 out.txt
--rwxr-xr-x@  1 hoseonyu  staff    22B Oct  2 18:12 shell.sh
--rw-r--r--@  1 hoseonyu  staff     8B Oct  6 13:48 test.txt
-drwxr-xr-x@  4 hoseonyu  staff   128B Oct  2 17:29 testdir
+ls -lah

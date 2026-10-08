@@ -3,6 +3,17 @@
 #define BUFSIZE 4096         /* set buffer size for any buffer used in this program */
 #define TOKENDELIM " \r\n\t" /* this is used for strtok */
 
+typedef struct {
+    char *inputFile;
+
+    char *outputFile;
+    int outputAppend;
+
+    char *errorFile;
+    int errorAppend;
+} Redirection_t;
+
+
 int main(int argc, char **argv) {
     char *path = argv[1];
     FILE *fp;
@@ -26,7 +37,7 @@ int main(int argc, char **argv) {
     char *line = NULL;
     size_t size = 0;
 
-    int lastExitStatus = 0; /* keep track of last exist status, used for builtIn_exit */
+    int exitStatus = 0; /* keep track of last exist status, used for builtIn_exit */
 
     while (getline(&line, &size, fp) != -1) {
         fprintf(stderr, "[ DEBUG ] LINE_READ: %s", line);
@@ -56,7 +67,7 @@ int main(int argc, char **argv) {
         }
         printf("\n");
 
-        execute(token, &lastExitStatus);
+        execute(token, &exitStatus);
     }
 
     free(line);
@@ -80,36 +91,115 @@ int tokenize(char *line, char **buf) {
     return i;
 }
 
-int execute(char **token, int *lastExitStatus) { /* argv */
-    /* I/O redirection, find the  */
-    char *outputFile = NULL; 
-    char *inputFile = NULL;
-
+int parseRedirection(char **token, Redirection_t *redir) {
     int j = 0;
 
+    // since I wanted <in.txt and < in.txt to both work
+    // that was a bad idea :( 
+    // maybe there is a better way
     for (int i = 0; token[i] != NULL; i++) {
-        if (strcmp(token[i], ">") == 0) {
-            if (token[i + 1] == NULL) {
-                fprintf(stderr, "miniShell: syntax error, expected file after > \n");
-                return -1;
+        if (strncmp(token[i], "2>>", 3) == 0) {     /* stderr append */
+            if (token[i][3] != '\0') {
+                redir->errorFile = token[i] + 3;
+            } else {
+                if (token[i + 1] == NULL) {
+                    fprintf(stderr, "miniShell: expected file after 2>>\n");
+                    return -1;
+                }
+                redir->errorFile = token[i + 1];
+                i++;
             }
-            outputFile = token[i + 1];
-            i++; // skip the output file
-        } else if (strcmp(token[i], "<") == 0) {
-            if (token[i + 1] == NULL) {
-                fprintf(stderr, "miniShell: syntax error, expected file after < \n");
-                return -1;
+
+            redir->errorAppend = 1;
+        } 
+
+        else if (strncmp(token[i], "2>", 2) == 0) { /* stderr trunc */
+            if (token[i][2] != '\0') {
+                redir->errorFile = token[i] + 2;
+            } else {
+                if (token[i + 1] == NULL) {
+                    fprintf(stderr, "miniShell: expected file after 2>\n");
+                    return -1;
+                }
+                redir->errorFile = token[i + 1];
+                i++;
             }
-            inputFile = token[i + 1];
-            i++; // skip the input file
-        } else {
+
+            redir->errorAppend = 0;
+        }
+
+        else if (strncmp(token[i], ">>", 2) == 0) { /* stdout append */
+            if (token[i][2] != '\0') {
+                redir->outputFile = token[i] + 2;
+            } else {
+                if (token[i + 1] == NULL) {
+                    fprintf(stderr, "miniShell: expected file after >>\n");
+                    return -1;
+                }
+                redir->outputFile = token[i + 1];
+                i++;
+            }
+
+            redir->outputAppend = 1;
+        }
+
+        else if (strncmp(token[i], ">", 1) == 0) {  /* stdout trunc */
+            if (token[i][1] != '\0') {
+                redir->outputFile = token[i] + 1;
+            } else {
+                if (token[i + 1] == NULL) {
+                    fprintf(stderr, "miniShell: expected file after >\n");
+                    return -1;
+                }
+                redir->outputFile = token[i + 1];
+                i++;
+            }
+            redir->outputAppend = 0;
+        }
+
+        else if (strncmp(token[i], "<", 1) == 0) {  /* stdin */
+            if (token[i][1] != '\0') {
+                redir->inputFile= token[i] + 1;
+            } else {
+                if (token[i + 1] == NULL) {
+                    fprintf(stderr, "miniShell: expected file after <\n");
+                    return -1;
+                }
+                redir->inputFile= token[i + 1];
+                i++;
+            }
+        }
+
+        else {
             // if it is neither of the redirectino, then it is an actual command
             // reconstructing the command without any redirection info
-            token[j] = token[i];
-            j++;
+            token[j++] = token[i];
         }
     }
+
     token[j] = NULL;
+    return 0;
+}
+
+
+int execute(char **token, int *exitStatus) { /* argv */
+    /* I/O redirection, find the  */
+    Redirection_t redir = {0};
+    
+    if (parseRedirection(token, &redir) < 0) {
+        return 1;
+    }
+
+    if (token[0] == NULL) {
+        fprintf(stderr, "miniShell: no command was specified");
+        return 1;
+    }
+
+    printf("[ I/O ] input:  %s\n", redir.inputFile  ? redir.inputFile  : "NULL");
+    printf("[ I/O ] output: %s\n", redir.outputFile ? redir.outputFile : "NULL");
+    printf("[ I/O ] error:  %s\n", redir.errorFile  ? redir.errorFile  : "NULL");
+    printf("[ I/O ] out append: %d\n", redir.outputAppend);
+    printf("[ I/O ] err append: %d\n", redir.errorAppend);
 
     /* run built-in commands */
     if (strcmp(token[0], "pwd") == 0) {
@@ -121,51 +211,55 @@ int execute(char **token, int *lastExitStatus) { /* argv */
         return 1;
     }
     if (strcmp(token[0], "exit") == 0) {
-        builtIn_exit(token, lastExitStatus);
+        builtIn_exit(token, exitStatus);
         return 1; // left it just in case...
     }
 
     /* if none of the built-in commands were matched, run the program */
     int pid, status;
     switch (pid = fork()) {
-        case -1:
+        case -1: /* error */
             fprintf(stderr, "[ DEBUG ] failed fork\n");
             break;
+        case 0: /* child process */
 
-        case 0: 
             /* handle I/O redirection */
-            if (inputFile != NULL) {
-                int inFd = open(inputFile, O_RDONLY);
+            if (redir.inputFile != NULL) {
+                int inFd = open(redir.inputFile, O_RDONLY);
                 if (inFd < 0) {
-                    fprintf(stderr, "Can not open %s: %s", inputFile, strerror(errno));
-                    return 1;
+                    fprintf(stderr, "Can not open %s: %s", redir.inputFile, strerror(errno));
+                    exit(1);
                 }
 
                 dup2(inFd, STDIN_FILENO);
             }
 
-            if (outputFile != NULL) {
-                int outFd = open(outputFile, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+            if (redir.outputFile != NULL) {
+                int outFd = open(redir.outputFile, O_WRONLY | O_CREAT | O_TRUNC, 0666);
                 if (outFd< 0) {
-                    fprintf(stderr, "Can not open %s: %s", outputFile, strerror(errno));
-                    return 1;
+                    fprintf(stderr, "Can not open %s: %s", redir.outputFile, strerror(errno));
+                    exit(1);
                 }
 
                 dup2(outFd, STDOUT_FILENO);
             }
 
-            fprintf(stderr, "[ DEUBG ] running child\n");
-            int returnState = execvp(token[0], token);
+            /* run the program */
+            fprintf(stderr, "[ DEBUG ] running child: %s\n", token[0]);
+            execvp(token[0], token);
+
             /* error handling */
-
-            if (returnState < 0) {
-                fprintf(stderr, "[ ERROR ] execvp returned with an error: %s\n", strerror(errno));
-            }
-
-            break;
+            fprintf(stderr, "[ ERROR ] execvp failed: %s\n", strerror(errno));
+            exit(errno);
 
         default:
             wait(&status);
+            
+            if (WIFEXITED(status)) {
+                int exitStatus = WEXITSTATUS(status);
+                fprintf(stderr, "[ DEBUG ] pid %d (child) exited with status %d\n", pid, exitStatus);
+            }
+
             fprintf(stderr, "[ DEBUG ] waiting done. status: %d\n", status);
     }
 
@@ -196,16 +290,16 @@ int builtIn_pwd() {
     return 1;
 }
 
-int builtIn_exit(char **argv, int *lastExitStatus) {
+int builtIn_exit(char **argv, int *exitStatus) {
     /* if no argument, */
     if (argv[1] == NULL) {
-        exit(*lastExitStatus);
+        exit(*exitStatus);
     }
 
-    int exitStatus = atoi(argv[1]);
+    *exitStatus = atoi(argv[1]);
     // printf("%d\n", exitStatus);
 
-    exit(exitStatus);
+    exit(*exitStatus);
     return 1;
 }
 
