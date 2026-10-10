@@ -1,0 +1,2 @@
+[32m [ DEBUG ] [0mrunning child: cat
+cat: fsbxcvbnxv,mb: No such file or directory

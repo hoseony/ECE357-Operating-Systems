@@ -3,17 +3,21 @@
 #define BUFSIZE 4096         /* set buffer size for any buffer used in this program */
 #define TOKENDELIM " \r\n\t" /* this is used for strtok */
 
-typedef struct {
-    char *inputFile;
+/* added some labels */
+#define DEBUG "\x1b[32m [ DEBUG ] \x1b[0m" /* green */
+#define IO    "\x1b[34m [ I/O ] \x1b[0m"   /* blue */
+#define ERROR "\x1b[31m [ ERROR ] \x1b[0m" /* red */
 
-    char *outputFile;
-    int outputAppend;
+/* I learend something new */
+#ifdef DEBUG_MODE
+#define DBG(...) do { fprintf(stderr, DEBUG); fprintf(stderr, __VA_ARGS__); } while (0)
+#define PIO(...) do { fprintf(stderr, IO); fprintf(stderr, __VA_ARGS__); } while (0)
+#else
+#define DBG(...) ((void)0)
+#define PIO(...) ((void)0)
+#endif
 
-    char *errorFile;
-    int errorAppend;
-} Redirection_t;
-
-
+/* ========== main function ========== */
 int main(int argc, char **argv) {
     char *path = argv[1];
     FILE *fp;
@@ -33,39 +37,31 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    // userPrompt(); 
+    
     /* read all the lines */
     char *line = NULL;
     size_t size = 0;
-
-    int exitStatus = 0; /* keep track of last exist status, used for builtIn_exit */
+    int exitStatus = 0;
 
     while (getline(&line, &size, fp) != -1) {
-        fprintf(stderr, "[ DEBUG ] LINE_READ: %s", line);
+        DBG("LINE_READ: %s", line);
 
-        /* skip # */
-        if (line[0] == '#') {
-            printf("[ DEBUG ] # detected, skipping...\n");
+        if (line[0] == '#') { /* skip # */
+            DBG("# detected, skipping...\n");
             continue;
         }
 
         /* parse and execute */
-    
-        // tokenization
         char *token[BUFSIZE];
         int size = tokenize(line, token);
 
-        // empty line case, token[j] == NULL
-        if (size == 0) {
-            printf("\t  empty line detcted, skipping...\n");
+        if (size == 0) { /* empty line case, token[j] == NULL */
+            DBG("empty line detcted, skipping...\n");
             continue;
         }
         
-        // debug tokenize
-        printf("[ DEBUG ] TOKENIZE: ");
-        for (int j = 0; j < size; j++) {
-            printf("%s, ", token[j]);
-        }
-        printf("\n");
+        DEBUG_TOKEN(token);
 
         execute(token, &exitStatus);
     }
@@ -74,8 +70,10 @@ int main(int argc, char **argv) {
     if (fp != stdin)
         fclose(fp);
 
-    return 0;
+    return exitStatus;
 }
+
+/* ========== Token / Parse ========== */
 
 int tokenize(char *line, char **buf) {
     int i = 0;
@@ -91,14 +89,12 @@ int tokenize(char *line, char **buf) {
     return i;
 }
 
+/* handles both > out.txt and >out.txt */
 int parseRedirection(char **token, Redirection_t *redir) {
     int j = 0;
-
-    // since I wanted <in.txt and < in.txt to both work
-    // that was a bad idea :( 
-    // maybe there is a better way
+   
     for (int i = 0; token[i] != NULL; i++) {
-        if (strncmp(token[i], "2>>", 3) == 0) {     /* stderr append */
+        if (strncmp(token[i], "2>>", 3) == 0) { /* stderr append */
             if (token[i][3] != '\0') {
                 redir->errorFile = token[i] + 3;
             } else {
@@ -181,6 +177,56 @@ int parseRedirection(char **token, Redirection_t *redir) {
     return 0;
 }
 
+int redirectIO(Redirection_t *redir) {
+    if (redir->inputFile != NULL) { /* input */
+        int inFd = open(redir->inputFile, O_RDONLY);
+        if (inFd < 0) {
+            fprintf(stderr, "Can not open %s: %s", redir->inputFile, strerror(errno));
+            _exit(1);
+        }
+
+        dup2(inFd, STDIN_FILENO);
+        close(inFd);
+    }
+
+    if (redir->outputFile != NULL) { /* output */
+        int outFd;
+        if (redir->outputAppend == 1) {
+            outFd = open(redir->outputFile, O_WRONLY | O_CREAT | O_APPEND, 0666);
+            DBG("opened with append\n");
+        } else {
+            outFd = open(redir->outputFile, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+        }
+
+        if (outFd < 0) { /* input */
+            fprintf(stderr, "Can not open %s: %s", redir->outputFile, strerror(errno));
+            _exit(errno);
+        }
+
+        dup2(outFd, STDOUT_FILENO); // redirect stdout
+        close(outFd);
+    }
+
+    if (redir->errorFile != NULL) { /* error */
+        int errorFd;
+        if (redir->errorAppend == 1) {
+            errorFd = open(redir->errorFile, O_WRONLY | O_CREAT | O_APPEND, 0666);
+        } else {
+            errorFd = open(redir->errorFile, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+        }
+
+        if (errorFd < 0) {
+            fprintf(stderr, "Can not open %s: %s", redir->errorFile, strerror(errno));
+            _exit(1); 
+        }
+
+        dup2(errorFd, STDERR_FILENO);
+        close(errorFd);
+    }
+
+    return 1;
+}
+
 
 int execute(char **token, int *exitStatus) { /* argv */
     /* I/O redirection, find the  */
@@ -195,11 +241,7 @@ int execute(char **token, int *exitStatus) { /* argv */
         return 1;
     }
 
-    printf("[ I/O ] input:  %s\n", redir.inputFile  ? redir.inputFile  : "NULL");
-    printf("[ I/O ] output: %s\n", redir.outputFile ? redir.outputFile : "NULL");
-    printf("[ I/O ] error:  %s\n", redir.errorFile  ? redir.errorFile  : "NULL");
-    printf("[ I/O ] out append: %d\n", redir.outputAppend);
-    printf("[ I/O ] err append: %d\n", redir.errorAppend);
+    DEBUG_IO(redir);
 
     /* run built-in commands */
     if (strcmp(token[0], "pwd") == 0) {
@@ -217,69 +259,66 @@ int execute(char **token, int *exitStatus) { /* argv */
 
     /* if none of the built-in commands were matched, run the program */
     int pid, status;
+    struct rusage usage;
+    struct timespec start, end;
+
+    clock_gettime(CLOCK_MONOTONIC, &start);
+
     switch (pid = fork()) {
         case -1: /* error */
-            fprintf(stderr, "[ DEBUG ] failed fork\n");
+            fprintf(stderr, ERROR "failed fork\n");
             break;
+
         case 0: /* child process */
-
-            /* handle I/O redirection */
-            if (redir.inputFile != NULL) {
-                int inFd = open(redir.inputFile, O_RDONLY);
-                if (inFd < 0) {
-                    fprintf(stderr, "Can not open %s: %s", redir.inputFile, strerror(errno));
-                    exit(1);
-                }
-
-                dup2(inFd, STDIN_FILENO);
-            }
-
-            if (redir.outputFile != NULL) {
-                int outFd = open(redir.outputFile, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-                if (outFd< 0) {
-                    fprintf(stderr, "Can not open %s: %s", redir.outputFile, strerror(errno));
-                    exit(1);
-                }
-
-                dup2(outFd, STDOUT_FILENO);
-            }
+            DBG("running child: %s\n", token[0]);
+            redirectIO(&redir); /* handle I/O redirection */
 
             /* run the program */
-            fprintf(stderr, "[ DEBUG ] running child: %s\n", token[0]);
             execvp(token[0], token);
-
-            /* error handling */
-            fprintf(stderr, "[ ERROR ] execvp failed: %s\n", strerror(errno));
-            exit(errno);
+            fprintf(stderr, ERROR "execvp failed: %s\n", strerror(errno));
+            _exit(127);
 
         default:
-            wait(&status);
-            
+            wait3(&status, 0, &usage);
+            clock_gettime(CLOCK_MONOTONIC, &end);
+
+            double realTime, userTime, sysTime;
+            realTime = (end.tv_sec - start.tv_sec) + ((end.tv_nsec - start.tv_nsec) / 1000000000.0);
+            userTime = (usage.ru_utime.tv_sec) + (usage.ru_utime.tv_usec / 1000000.0);
+            sysTime = (usage.ru_stime.tv_sec) + (usage.ru_stime.tv_usec / 1000000.0);
+
             if (WIFEXITED(status)) {
-                int exitStatus = WEXITSTATUS(status);
-                fprintf(stderr, "[ DEBUG ] pid %d (child) exited with status %d\n", pid, exitStatus);
+                *exitStatus = WEXITSTATUS(status);
+                DBG("pid %d (child) exited with return %d\n", pid, *exitStatus);
+            } else if (WIFSIGNALED(status)) {
+                *exitStatus = 128 + WTERMSIG(status);
+                DBG("pid %d (child) exited with signal %d\n", pid, *exitStatus);
             }
 
-            fprintf(stderr, "[ DEBUG ] waiting done. status: %d\n", status);
+            fprintf(stderr, "Real: %.3fs User: %.3fs Sys: %.3fs\n", realTime, userTime, sysTime);
     }
 
     return 1;
 }
 
-/* built-in commands */
+/* ========== built-in commands ========== */
 int builtIn_cd(char *dir) {
     /* default: home directory */
     if (dir == NULL) {
         char *value;
         value = getenv("HOME");
-        printf("[ DEBUG ] getenv: %s\n", value);
+        DBG("getenv: %s\n", value);
         chdir(value);
         return 1;
     }
 
     /* else, use dir */
     chdir(dir);
-    printf("[ DEBUG ] "); builtIn_pwd();
+    char cwd[BUFSIZE];
+    getcwd(cwd, sizeof(cwd));
+
+    DBG("%s\n", cwd); 
+
     return 1;
 }
 
@@ -297,9 +336,34 @@ int builtIn_exit(char **argv, int *exitStatus) {
     }
 
     *exitStatus = atoi(argv[1]);
-    // printf("%d\n", exitStatus);
+    DBG("%d\n", *exitStatus);
 
     exit(*exitStatus);
     return 1;
 }
 
+void userPrompt() {
+    char cwd[BUFSIZE];
+    getcwd(cwd, sizeof(cwd));
+    fprintf(stdout, "~%s > ", cwd);
+}
+
+/* ========== helper functions ========== */
+void DEBUG_IO(Redirection_t redir) {
+    PIO("input:  %s\n", redir.inputFile  ? redir.inputFile  : "NULL");
+    PIO("output: %s\n", redir.outputFile ? redir.outputFile : "NULL");
+    PIO("error:  %s\n", redir.errorFile  ? redir.errorFile  : "NULL");
+    PIO("out append: %d\n", redir.outputAppend);
+    PIO("err append: %d\n", redir.errorAppend);
+}
+
+void DEBUG_TOKEN(char **token) {
+#ifdef DEBUG_MODE 
+        // debug tokenize
+        printf(DEBUG "TOKENIZE: ");
+        for (int j = 0; j < size; j++) {
+            printf("%s, ", token[j]);
+        }
+        printf("\n");
+#endif
+}
