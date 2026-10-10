@@ -74,7 +74,6 @@ int main(int argc, char **argv) {
 }
 
 /* ========== Token / Parse ========== */
-
 int tokenize(char *line, char **buf) {
     int i = 0;
     char *token = strtok(line, TOKENDELIM);
@@ -89,10 +88,10 @@ int tokenize(char *line, char **buf) {
     return i;
 }
 
-/* handles both > out.txt and >out.txt */
 int parseRedirection(char **token, Redirection_t *redir) {
     int j = 0;
    
+    /* handles both > out.txt and >out.txt */
     for (int i = 0; token[i] != NULL; i++) {
         if (strncmp(token[i], "2>>", 3) == 0) { /* stderr append */
             if (token[i][3] != '\0') {
@@ -200,7 +199,7 @@ int redirectIO(Redirection_t *redir) {
 
         if (outFd < 0) { /* input */
             fprintf(stderr, "Can not open %s: %s", redir->outputFile, strerror(errno));
-            _exit(errno);
+            _exit(1);
         }
 
         dup2(outFd, STDOUT_FILENO); // redirect stdout
@@ -227,11 +226,9 @@ int redirectIO(Redirection_t *redir) {
     return 1;
 }
 
-
-int execute(char **token, int *exitStatus) { /* argv */
+int execute(char **token, int *exitStatus) {
     /* I/O redirection, find the  */
     Redirection_t redir = {0};
-    
     if (parseRedirection(token, &redir) < 0) {
         return 1;
     }
@@ -245,11 +242,11 @@ int execute(char **token, int *exitStatus) { /* argv */
 
     /* run built-in commands */
     if (strcmp(token[0], "pwd") == 0) {
-        builtIn_pwd();
+        *exitStatus = builtIn_pwd();
         return 1;
     }
     if (strcmp(token[0], "cd") == 0) {
-        builtIn_cd(token[1]);
+        *exitStatus = builtIn_cd(token[1]);
         return 1;
     }
     if (strcmp(token[0], "exit") == 0) {
@@ -289,10 +286,11 @@ int execute(char **token, int *exitStatus) { /* argv */
 
             if (WIFEXITED(status)) {
                 *exitStatus = WEXITSTATUS(status);
-                DBG("pid %d (child) exited with return %d\n", pid, *exitStatus);
+                fprintf(stderr, "pid %d (child) exited with return %d\n", pid, *exitStatus);
             } else if (WIFSIGNALED(status)) {
+                int sig = WTERMSIG(status)
                 *exitStatus = 128 + WTERMSIG(status);
-                DBG("pid %d (child) exited with signal %d\n", pid, *exitStatus);
+                fprintf(stderr, "pid %d (child) exited with signal %d\n", pid, *exitStatus);
             }
 
             fprintf(stderr, "Real: %.3fs User: %.3fs Sys: %.3fs\n", realTime, userTime, sysTime);
@@ -305,28 +303,31 @@ int execute(char **token, int *exitStatus) { /* argv */
 int builtIn_cd(char *dir) {
     /* default: home directory */
     if (dir == NULL) {
-        char *value;
-        value = getenv("HOME");
-        DBG("getenv: %s\n", value);
-        chdir(value);
+        dir = getenv("HOME");
+        
+        if (dir == NULL) {
+            fprintf(stderr, "miniShell: HOME not set\n");
+            return 1;
+        }
+    }
+
+    if (chdir(dir) < 0) {
+        fprintf(stderr, "miniShell: cd: %s: %s\n", dir, strerror(errno));
         return 1;
     }
 
-    /* else, use dir */
-    chdir(dir);
-    char cwd[BUFSIZE];
-    getcwd(cwd, sizeof(cwd));
-
-    DBG("%s\n", cwd); 
-
-    return 1;
+    return 0;
 }
 
 int builtIn_pwd() {
     char cwd[BUFSIZE];
-    getcwd(cwd, sizeof(cwd));
-    printf("%s\n", cwd);
-    return 1;
+
+    if(getcwd(cwd, sizeof(cwd)) == NULL) {
+        fprintf(stderr, "miniShell: pwd: %s\n", strerror(errno));
+        return 1;
+    }
+    fprintf(stdout, "%s\n", cwd);
+    return 0;
 }
 
 int builtIn_exit(char **argv, int *exitStatus) {
@@ -361,7 +362,7 @@ void DEBUG_TOKEN(char **token) {
 #ifdef DEBUG_MODE 
         // debug tokenize
         printf(DEBUG "TOKENIZE: ");
-        for (int j = 0; j < size; j++) {
+        for (int j = 0; token[j] != NULL; j++) {
             printf("%s, ", token[j]);
         }
         printf("\n");
