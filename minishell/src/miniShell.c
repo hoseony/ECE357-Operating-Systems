@@ -1,22 +1,5 @@
 #include "miniShell.h"
 
-#define BUFSIZE 4096         /* set buffer size for any buffer used in this program */
-#define TOKENDELIM " \r\n\t" /* this is used for strtok */
-
-/* added some labels */
-#define DEBUG "\x1b[32m [ DEBUG ] \x1b[0m" /* green */
-#define IO    "\x1b[34m [ I/O ] \x1b[0m"   /* blue */
-#define ERROR "\x1b[31m [ ERROR ] \x1b[0m" /* red */
-
-/* I learend something new */
-#ifdef DEBUG_MODE
-#define DBG(...) do { fprintf(stderr, DEBUG); fprintf(stderr, __VA_ARGS__); } while (0)
-#define PIO(...) do { fprintf(stderr, IO); fprintf(stderr, __VA_ARGS__); } while (0)
-#else
-#define DBG(...) ((void)0)
-#define PIO(...) ((void)0)
-#endif
-
 /* ========== main function ========== */
 int main(int argc, char **argv) {
     char *path = argv[1];
@@ -63,7 +46,7 @@ int main(int argc, char **argv) {
         
         DEBUG_TOKEN(token);
 
-        execute(token, &exitStatus);
+        execute(token, &exitStatus, fp);
     }
 
     free(line);
@@ -88,88 +71,57 @@ int tokenize(char *line, char **buf) {
     return i;
 }
 
+/* if token starts with a redirection operator, return that
+ * entry from the table. This approach was used to avoid cut
+ * and copy code. */
+const RedirOption_t *findRedir(char *token) {
+    for (int i = 0; i < 5; i++) {
+        // redirOptions contains operation, fd and flags
+        const char *op = redirOptions[i].operation;
+        
+        // If first the leading characters are the same
+        // as the operation in the redirOptions, return
+        // the values from the table. Otherwise, NULL.
+        if (strncmp(token, op, strlen(op)) == 0) {
+            return &redirOptions[i];
+        }
+    }
+    return NULL;
+}
+
 int parseRedirection(char **token, Redirection_t *redir) {
     int j = 0;
-   
-    /* handles both > out.txt and >out.txt */
+
+    // loop through the tokens
     for (int i = 0; token[i] != NULL; i++) {
-        if (strncmp(token[i], "2>>", 3) == 0) { /* stderr append */
-            if (token[i][3] != '\0') {
-                redir->errorFile = token[i] + 3;
-            } else {
-                if (token[i + 1] == NULL) {
-                    fprintf(stderr, "miniShell: expected file after 2>>\n");
-                    return -1;
-                }
-                redir->errorFile = token[i + 1];
-                i++;
-            }
+        // get the operation, fd and flags 
+        const RedirOption_t *opt = findRedir(token[i]);
 
-            redir->errorAppend = 1;
-        } 
-
-        else if (strncmp(token[i], "2>", 2) == 0) { /* stderr trunc */
-            if (token[i][2] != '\0') {
-                redir->errorFile = token[i] + 2;
-            } else {
-                if (token[i + 1] == NULL) {
-                    fprintf(stderr, "miniShell: expected file after 2>\n");
-                    return -1;
-                }
-                redir->errorFile = token[i + 1];
-                i++;
-            }
-
-            redir->errorAppend = 0;
-        }
-
-        else if (strncmp(token[i], ">>", 2) == 0) { /* stdout append */
-            if (token[i][2] != '\0') {
-                redir->outputFile = token[i] + 2;
-            } else {
-                if (token[i + 1] == NULL) {
-                    fprintf(stderr, "miniShell: expected file after >>\n");
-                    return -1;
-                }
-                redir->outputFile = token[i + 1];
-                i++;
-            }
-
-            redir->outputAppend = 1;
-        }
-
-        else if (strncmp(token[i], ">", 1) == 0) {  /* stdout trunc */
-            if (token[i][1] != '\0') {
-                redir->outputFile = token[i] + 1;
-            } else {
-                if (token[i + 1] == NULL) {
-                    fprintf(stderr, "miniShell: expected file after >\n");
-                    return -1;
-                }
-                redir->outputFile = token[i + 1];
-                i++;
-            }
-            redir->outputAppend = 0;
-        }
-
-        else if (strncmp(token[i], "<", 1) == 0) {  /* stdin */
-            if (token[i][1] != '\0') {
-                redir->inputFile= token[i] + 1;
-            } else {
-                if (token[i + 1] == NULL) {
-                    fprintf(stderr, "miniShell: expected file after <\n");
-                    return -1;
-                }
-                redir->inputFile= token[i + 1];
-                i++;
-            }
-        }
-
-        else {
-            // if it is neither of the redirectino, then it is an actual command
-            // reconstructing the command without any redirection info
+        /* keep the normal words */
+        if (opt == NULL) {
+            // reconstructing the token as the code runs
+            // (excluding I/O redirection flags)
             token[j++] = token[i];
+            continue;
         }
+
+        /* redirection (case where there is no space) */
+        char *file = token[i] + strlen(opt->operation);
+
+        /* if that didn't work, go to the next token */
+        if (file[0] == '\0') {
+            i++;
+            file = token[i];
+            
+            /* error handling */
+            if (file == NULL) {
+                fprintf(stderr, "miniShell: expected file after %s\n", opt->operation);
+                return -1;
+            }
+        }
+
+        redir->file[opt->fd] = file;
+        redir->append[opt->fd] = opt->flags;
     }
 
     token[j] = NULL;
@@ -177,56 +129,29 @@ int parseRedirection(char **token, Redirection_t *redir) {
 }
 
 int redirectIO(Redirection_t *redir) {
-    if (redir->inputFile != NULL) { /* input */
-        int inFd = open(redir->inputFile, O_RDONLY);
-        if (inFd < 0) {
-            fprintf(stderr, "Can not open %s: %s", redir->inputFile, strerror(errno));
+    for (int i = 0; i < 3; i++) {
+        /* no redirection specified */
+        if (redir->file[i] == NULL) {
+            continue;
+        }
+        
+        /* open the file with the flags saved */
+        int fd = open(redir->file[i], redir->append[i], 0666);
+
+        if (fd < 0) {
+            fprintf(stderr, "Can not open %s: %s\n", redir->file[i], strerror(errno));
             _exit(1);
         }
 
-        dup2(inFd, STDIN_FILENO);
-        close(inFd);
-    }
-
-    if (redir->outputFile != NULL) { /* output */
-        int outFd;
-        if (redir->outputAppend == 1) {
-            outFd = open(redir->outputFile, O_WRONLY | O_CREAT | O_APPEND, 0666);
-            DBG("opened with append\n");
-        } else {
-            outFd = open(redir->outputFile, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-        }
-
-        if (outFd < 0) { /* input */
-            fprintf(stderr, "Can not open %s: %s", redir->outputFile, strerror(errno));
-            _exit(1);
-        }
-
-        dup2(outFd, STDOUT_FILENO); // redirect stdout
-        close(outFd);
-    }
-
-    if (redir->errorFile != NULL) { /* error */
-        int errorFd;
-        if (redir->errorAppend == 1) {
-            errorFd = open(redir->errorFile, O_WRONLY | O_CREAT | O_APPEND, 0666);
-        } else {
-            errorFd = open(redir->errorFile, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-        }
-
-        if (errorFd < 0) {
-            fprintf(stderr, "Can not open %s: %s", redir->errorFile, strerror(errno));
-            _exit(1); 
-        }
-
-        dup2(errorFd, STDERR_FILENO);
-        close(errorFd);
+        dup2(fd, i);
+        close(fd);
     }
 
     return 1;
 }
 
-int execute(char **token, int *exitStatus) {
+/* ========== execution ========== */
+int execute(char **token, int *exitStatus, FILE *fp) {
     /* I/O redirection, find the  */
     Redirection_t redir = {0};
     if (parseRedirection(token, &redir) < 0) {
@@ -234,7 +159,7 @@ int execute(char **token, int *exitStatus) {
     }
 
     if (token[0] == NULL) {
-        fprintf(stderr, "miniShell: no command was specified");
+        fprintf(stderr, "miniShell: no command was specified\n");
         return 1;
     }
 
@@ -263,19 +188,23 @@ int execute(char **token, int *exitStatus) {
 
     switch (pid = fork()) {
         case -1: /* error */
-            fprintf(stderr, ERROR "failed fork\n");
+            fprintf(stderr, "ERROR: failed fork\n");
             break;
 
         case 0: /* child process */
+            if (fp != stdin)
+                close(fileno(fp));
+
             DBG("running child: %s\n", token[0]);
             redirectIO(&redir); /* handle I/O redirection */
 
             /* run the program */
             execvp(token[0], token);
-            fprintf(stderr, ERROR "execvp failed: %s\n", strerror(errno));
+            fprintf(stderr, "ERROR: execvp failed: %s\n", strerror(errno));
             _exit(127);
 
         default:
+            /* get time */
             wait3(&status, 0, &usage);
             clock_gettime(CLOCK_MONOTONIC, &end);
 
@@ -284,13 +213,14 @@ int execute(char **token, int *exitStatus) {
             userTime = (usage.ru_utime.tv_sec) + (usage.ru_utime.tv_usec / 1000000.0);
             sysTime = (usage.ru_stime.tv_sec) + (usage.ru_stime.tv_usec / 1000000.0);
 
+            /* check exit status */
             if (WIFEXITED(status)) {
                 *exitStatus = WEXITSTATUS(status);
                 fprintf(stderr, "pid %d (child) exited with return %d\n", pid, *exitStatus);
             } else if (WIFSIGNALED(status)) {
-                int sig = WTERMSIG(status)
-                *exitStatus = 128 + WTERMSIG(status);
-                fprintf(stderr, "pid %d (child) exited with signal %d\n", pid, *exitStatus);
+                int sig = WTERMSIG(status);
+                *exitStatus = 128 + sig;
+                fprintf(stderr, "pid %d (child) exited with signal %d (%s)\n", pid, sig, strsignal(sig));
             }
 
             fprintf(stderr, "Real: %.3fs User: %.3fs Sys: %.3fs\n", realTime, userTime, sysTime);
@@ -351,20 +281,18 @@ void userPrompt() {
 
 /* ========== helper functions ========== */
 void DEBUG_IO(Redirection_t redir) {
-    PIO("input:  %s\n", redir.inputFile  ? redir.inputFile  : "NULL");
-    PIO("output: %s\n", redir.outputFile ? redir.outputFile : "NULL");
-    PIO("error:  %s\n", redir.errorFile  ? redir.errorFile  : "NULL");
-    PIO("out append: %d\n", redir.outputAppend);
-    PIO("err append: %d\n", redir.errorAppend);
+    PIO("input:  %s\n", redir.file[0] ? redir.file[0] : "NULL");
+    PIO("output: %s\n", redir.file[1] ? redir.file[1] : "NULL");
+    PIO("error:  %s\n", redir.file[2] ? redir.file[2] : "NULL");
 }
 
 void DEBUG_TOKEN(char **token) {
 #ifdef DEBUG_MODE 
-        // debug tokenize
-        printf(DEBUG "TOKENIZE: ");
-        for (int j = 0; token[j] != NULL; j++) {
-            printf("%s, ", token[j]);
-        }
-        printf("\n");
+    // debug tokenize
+    printf(DEBUG "TOKENIZE: ");
+    for (int j = 0; token[j] != NULL; j++) {
+        printf("%s, ", token[j]);
+    }
+    printf("\n");
 #endif
 }
