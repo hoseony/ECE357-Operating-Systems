@@ -5,6 +5,7 @@
 #include <sys/wait.h>
 #include <errno.h>
 #include <signal.h>
+#include <time.h>
 
 #define BUF_SIZE 4096
 
@@ -15,7 +16,7 @@ void handler(int sig) {
 }
 
 int main(int argc, char **argv) {
-    /* command line */
+    /* command line arguments */
     if (argc < 3) {
         fprintf(stderr, "usage: %s writeSize iterations [restart]\n", argv[0]);
         exit(1);
@@ -32,11 +33,11 @@ int main(int argc, char **argv) {
 
     /* establish pipe */
     int fds[2]; // fd[0] = read, fd[1] = write
-    if (pipe(fds) < 0) {
-        // pipe failed
+    if (pipe(fds) < 0) { // pipe failed
         perror("pipe");
         exit(1);
     }
+
 
     pid_t reader_pid, writer_pid;
     int n = 0;
@@ -44,6 +45,8 @@ int main(int argc, char **argv) {
     int hist[556] = {0};
     long long int total = 0; // probably unnecessarily long...
 
+    
+    /* reader side */
     switch(reader_pid = fork()) {
         case -1: // fork failed
             fprintf(stderr, "error: Can not fork reader_pid: %s\n", strerror(errno));
@@ -73,34 +76,59 @@ int main(int argc, char **argv) {
             break;
     }
 
+
+    /* sigaction */
+    struct sigaction sa;
+    sa.sa_handler = handler;
+    sa.sa_flags = restart ? SA_RESTART : 0;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGUSR1, &sa, NULL);
+
+
+    /* writer side */
     switch(writer_pid = fork()) {
         case -1: // fork failed
             fprintf(stderr, "error: Can not fork writer_pid: %s\n", strerror(errno));
             _exit(1);
         case 0: { // child
             close(fds[0]); // writer never reads
-            
-            struct sigaction sa;
-            sa.sa_handler = handler;
-            sa.sa_flags = restart ? SA_RESTART : 0;
-            sigemptyset(&sa.sa_mask);
-            sigaction(SIGUSR1, &sa, NULL);
+
+            /* setting up buffers */
+            // malloc because wbuf[writeSize] doesn't work with high number
+            int *wcount = calloc(writeSize + 1, sizeof(int));
 
             char *wbuf = malloc(writeSize);
-            if (wbuf < 0) {
-                fprintf(stderr, "Can not malloc size %d\n", writeSize);
-                exit(1);
-            }
-
             memset(wbuf, 'A', writeSize);
 
+            int eintr = 0;
+            long long int wtotal = 0;
             for (int i = 0; i < itr; i++) {
-                write(fds[1], wbuf, writeSize);
+                int w = write(fds[1], wbuf, writeSize);
+
+                if (w < 0) {
+                    if (errno == EINTR) {
+                        eintr++;
+                        continue;
+                    }
+                    fprintf(stderr, "error: can not write: %s\n", strerror(errno));
+                    exit(1);
+                }
+                wcount[w]++;
+                wtotal += w;
             }
 
-            fprintf(stdout, "SIGUSR1: %d\n", handled);
+            printf("%d EINTRs\n", eintr);
+            printf("%d SIGUSR1 handled\n", handled);
+            for (int i = 0; i <= writeSize; i++) {
+                if (wcount[i] > 0) {
+                    printf("%d writes of %d bytes\n", wcount[i], i);
+                }
+            } 
+            printf("%lld bytes written\n", wtotal);
+
 
             free(wbuf);
+            free(wcount);
             exit(0);
         }
         default:
@@ -110,18 +138,19 @@ int main(int argc, char **argv) {
     close(fds[1]);
 
     long long int sent = 0;
-    while (waitpid(reader_pid, NULL, 0) != writer_pid) {
+    struct timespec sp = {0, 5000};
+    while (waitpid(writer_pid, NULL, WNOHANG) != writer_pid) {
         if (kill(writer_pid, SIGUSR1) == -1) {
             fprintf(stderr, "can not send SIGUSR1 to writer: %s\n", strerror(errno));
             break;
         }
         sent ++;
-        sleep(1);
+        nanosleep(&sp, NULL);
     }
     printf("writer is done\n");
     printf("%lld SIGUSR1 sent\n", sent);
 
-    waitpid(writer_pid, NULL, 0);
+    waitpid(reader_pid, NULL, 0);
 
     return 0;
 }
