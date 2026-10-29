@@ -77,13 +77,11 @@ int main(int argc, char **argv) {
     }
 
 
-    /* sigaction */
-    struct sigaction sa;
-    sa.sa_handler = handler;
-    sa.sa_flags = restart ? SA_RESTART : 0;
-    sigemptyset(&sa.sa_mask);
-    sigaction(SIGUSR1, &sa, NULL);
-
+    /* block sigusr1 until writer establishes */
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR1);
+    sigprocmask(SIG_BLOCK, &set, NULL);
 
     /* writer side */
     switch(writer_pid = fork()) {
@@ -96,10 +94,24 @@ int main(int argc, char **argv) {
             /* setting up buffers */
             // malloc because wbuf[writeSize] doesn't work with high number
             int *wcount = calloc(writeSize + 1, sizeof(int));
-
             char *wbuf = malloc(writeSize);
+
+            if ((wcount == NULL) | (wbuf == NULL)) {
+                fprintf(stderr, "error: can not allocate");
+                exit(1);
+            }
+
             memset(wbuf, 'A', writeSize);
 
+           /* sigaction, establish handler and unblock */
+            struct sigaction sa;
+            sa.sa_handler = handler;
+            sa.sa_flags = restart ? SA_RESTART : 0;
+            sigemptyset(&sa.sa_mask);
+            sigaction(SIGUSR1, &sa, NULL);
+            sigprocmask(SIG_UNBLOCK, &set, NULL);
+
+            /* start writing */
             int eintr = 0;
             long long int wtotal = 0;
             for (int i = 0; i < itr; i++) {
@@ -117,6 +129,9 @@ int main(int argc, char **argv) {
                 wtotal += w;
             }
 
+            /* block SIGUSR1 */
+            sigprocmask(SIG_BLOCK, &set, NULL);
+
             printf("%d EINTRs\n", eintr);
             printf("%d SIGUSR1 handled\n", handled);
             for (int i = 0; i <= writeSize; i++) {
@@ -124,7 +139,7 @@ int main(int argc, char **argv) {
                     printf("%d writes of %d bytes\n", wcount[i], i);
                 }
             } 
-            printf("%lld bytes written\n", wtotal);
+            printf("%lld total bytes written\n", wtotal);
 
 
             free(wbuf);
@@ -137,20 +152,27 @@ int main(int argc, char **argv) {
     close(fds[0]);
     close(fds[1]);
 
+    /* parent code */
     long long int sent = 0;
     struct timespec sp = {0, 5000};
+
     while (waitpid(writer_pid, NULL, WNOHANG) != writer_pid) {
         if (kill(writer_pid, SIGUSR1) == -1) {
-            fprintf(stderr, "can not send SIGUSR1 to writer: %s\n", strerror(errno));
+            if (errno == ESRCH) {
+                fprintf(stderr, "kill returned ESRCH, writer is done\n");
+            } else {
+                fprintf(stderr, "kill failed: %s\n", strerror(errno));
+            }
             break;
         }
         sent ++;
         nanosleep(&sp, NULL);
     }
-    printf("writer is done\n");
-    printf("%lld SIGUSR1 sent\n", sent);
 
     waitpid(reader_pid, NULL, 0);
+
+    printf("writer is done\n");
+    printf("%lld SIGUSR1 sent\n", sent);
 
     return 0;
 }
